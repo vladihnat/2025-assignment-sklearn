@@ -1,19 +1,17 @@
 # ##################################################
 # YOU SHOULD NOT TOUCH THIS FILE !
 # ##################################################
-import pytest
 import numpy as np
 import pandas as pd
+import pytest
 from numpy.testing import assert_array_equal
-
-from sklearn.utils.estimator_checks import check_estimator
-from sklearn.model_selection import train_test_split
-from sklearn.utils import shuffle
 from sklearn.datasets import make_classification
+from sklearn.model_selection import train_test_split
 from sklearn.neighbors import KNeighborsClassifier
+from sklearn.utils import shuffle
+from sklearn.utils.estimator_checks import check_estimator
 
-from sklearn_questions import KNearestNeighbors
-from sklearn_questions import MonthlySplit
+from sklearn_questions import KNearestNeighbors, MonthlySplit
 
 
 @pytest.mark.parametrize("k", [1, 3, 5, 7])
