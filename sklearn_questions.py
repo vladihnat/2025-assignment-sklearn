@@ -52,14 +52,7 @@ import itertools
 
 import numpy as np
 import pandas as pd
-
-from sklearn.base import BaseEstimator
-from sklearn.base import ClassifierMixin
-
-from sklearn.model_selection import BaseCrossValidator
-
-from sklearn.utils.validation import check_is_fitted
-from sklearn.utils.validation import validate_data
+from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.metrics.pairwise import pairwise_distances
 from sklearn.model_selection import BaseCrossValidator
 from sklearn.utils.multiclass import check_classification_targets
@@ -110,6 +103,17 @@ class KNearestNeighbors(ClassifierMixin, BaseEstimator):
         self : instance of KNearestNeighbors
             The current instance of the classifier
         """
+        X, y = validate_data(self, X, y)
+        check_classification_targets(y)
+
+        if self.n_neighbors < 1:
+            raise ValueError(
+                f"n_neighbors must be at least 1, got {self.n_neighbors}."
+            )
+
+        self.X_train_ = X
+        self.y_train_ = y
+        self.classes_ = np.unique(y)
         return self
 
     def predict(self, X):
@@ -125,8 +129,27 @@ class KNearestNeighbors(ClassifierMixin, BaseEstimator):
         y : ndarray, shape (n_test_samples,)
             Predicted class labels for each test data sample.
         """
-        y_pred = np.zeros(X.shape[0])
-        return y_pred
+        check_is_fitted(self)
+        X = validate_data(self, X, reset=False)
+
+        if self.n_neighbors > self.X_train_.shape[0]:
+            raise ValueError(
+                f"n_neighbors ({self.n_neighbors}) cannot exceed the number "
+                f"of training samples ({self.X_train_.shape[0]})."
+            )
+
+        # Indices of the n_neighbors closest training samples for each row.
+        # A stable sort makes ties between equidistant samples deterministic.
+        distances = pairwise_distances(X, self.X_train_, metric="euclidean")
+        neighbors = np.argsort(distances, axis=1, kind="stable")
+        neighbors = neighbors[:, :self.n_neighbors]
+
+        # Majority vote over the labels of the neighbors. The labels are
+        # encoded as integers so that any label dtype (e.g. str) works.
+        y_encoded = np.searchsorted(self.classes_, self.y_train_)
+        one_hot = np.eye(len(self.classes_), dtype=int)[y_encoded[neighbors]]
+        votes = one_hot.sum(axis=1)  # shape (n_test_samples, n_classes)
+        return self.classes_[votes.argmax(axis=1)]
 
     def score(self, X, y):
         """Calculate the score of the prediction.
@@ -143,7 +166,14 @@ class KNearestNeighbors(ClassifierMixin, BaseEstimator):
         score : float
             Accuracy of the model computed for the (X, y) pairs.
         """
-        return 0.
+        y = column_or_1d(y)
+        y_pred = self.predict(X)
+        if y_pred.shape != y.shape:
+            raise ValueError(
+                f"X and y have inconsistent numbers of samples: "
+                f"{y_pred.shape[0]} and {y.shape[0]}."
+            )
+        return float(np.mean(y_pred == y))
 
 
 class MonthlySplit(BaseCrossValidator):
@@ -207,7 +237,8 @@ class MonthlySplit(BaseCrossValidator):
         n_splits : int
             The number of splits.
         """
-        return 0
+        n_months = np.unique(self._get_month_ids(X)).size
+        return max(n_months - 1, 0)
 
     def split(self, X, y=None, groups=None):
         """Generate indices to split data into training and test set.
@@ -229,12 +260,16 @@ class MonthlySplit(BaseCrossValidator):
         idx_test : ndarray
             The testing set indices for that split.
         """
+        # Validate eagerly (``split`` itself is not a generator) so that a
+        # bad `time_col` raises as soon as ``split`` is called.
+        month_ids = self._get_month_ids(X)
+        return self._iter_splits(month_ids)
 
-        n_samples = X.shape[0]
-        n_splits = self.get_n_splits(X, y, groups)
-        for i in range(n_splits):
-            idx_train = range(n_samples)
-            idx_test = range(n_samples)
-            yield (
-                idx_train, idx_test
-            )
+    @staticmethod
+    def _iter_splits(month_ids):
+        """Yield (train, test) indices for each pair of successive months."""
+        months = np.unique(month_ids)
+        for month_train, month_test in itertools.pairwise(months):
+            idx_train = np.flatnonzero(month_ids == month_train)
+            idx_test = np.flatnonzero(month_ids == month_test)
+            yield idx_train, idx_test
